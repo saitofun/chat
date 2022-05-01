@@ -1,2 +1,6 @@
-build/
+build/client
+build/server
 .session.vim
+pkg/modules/profanity_words/config
+go.sum
+

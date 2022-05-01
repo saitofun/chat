@@ -42,6 +42,9 @@ func (m *mgr) CreateUser(name string, c *qsock.Node) (*models.UserInfo, error) {
 	if _, ok := m.users[name]; ok {
 		return nil, errors.ErrUserExisted
 	}
+	if _, ok := m.clients[c.ID()]; ok {
+		return nil, errors.ErrUserOnline
+	}
 	user := &models.User{Name: name, CreatedAt: time.Now()}
 	info := models.NewUserInfo(user, c)
 	m.clients[c.ID()] = info
@@ -61,6 +64,12 @@ func (m *mgr) UserLogin(name string, c *qsock.Node) (*models.UserInfo, error) {
 	if user, ok = m.users[name]; !ok {
 		return nil, errors.ErrUserNotExisted
 	}
+	if _, ok = m.clients[c.ID()]; ok {
+		return nil, errors.ErrUserOnline
+	}
+	if user.LastLogin.After(user.LogoffAt) {
+		return nil, errors.ErrUserOnline
+	}
 	if info, ok = m.clients[c.ID()]; ok {
 		return nil, errors.ErrUserOnline
 	}
@@ -69,6 +78,25 @@ func (m *mgr) UserLogin(name string, c *qsock.Node) (*models.UserInfo, error) {
 	return info, nil
 }
 
-func (m *mgr) UserOffline(name string, cid string) {
+func (m *mgr) UserOffline(cid string) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	if u, ok := m.clients[cid]; ok {
+		delete(m.clients, cid)
+		if u != nil {
+			u.Logoff()
+		}
+	}
+}
 
+func (m *mgr) GetUserInfoByName(name string) *models.UserInfo {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	for _, i := range m.clients {
+		if i.Name == name {
+			return i
+		}
+	}
+	return nil
 }

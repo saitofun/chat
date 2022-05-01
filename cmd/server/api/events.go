@@ -1,86 +1,124 @@
 package api
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/saitofun/chat/pkg/depends/protoc"
 	"github.com/saitofun/chat/pkg/errors"
+	"github.com/saitofun/chat/pkg/models"
 	"github.com/saitofun/chat/pkg/modules/rooms"
 	"github.com/saitofun/chat/pkg/modules/users"
 	"github.com/saitofun/qlib/encoding/qjson"
 	"github.com/saitofun/qlib/net/qsock"
 )
 
-func OnEcho(msg *protoc.Echo, c *qsock.Node) error {
+func OnEcho(ev *qsock.Event) {
+	msg := ev.Payload().(*protoc.Echo)
+	c := ev.Node()
 	ctrl := users.Controller()
 	user := ctrl.GetByClientID(c.ID())
 	if user == nil {
-		return errors.ErrUserNotLogin
+		Response(msg.Seq, errors.ErrUserNotLogin, c)
+		return
 	}
+	msg.SetFrom(user.Name)
 	if err := user.Pub(msg); err != nil {
-		return err
+		Response(msg.Seq, err, c)
 	}
-	return nil
 }
 
-func OnGmCmd(msg *protoc.Instruct, c *qsock.Node) error {
+func OnGmCmd(ev *qsock.Event) {
 	var (
-		err      error
+		msg, c   = ev.Payload().(*protoc.Instruct), ev.Node()
 		ctrlUser = users.Controller()
 		ctrlRoom = rooms.Controller()
 		user     = ctrlUser.GetByClientID(c.ID())
-		rsp      interface{}
+		seq      = msg.Seq
 	)
 
 	if user == nil && msg.GmCmd != protoc.GmCreateUser && msg.GmCmd != protoc.GmLogin {
-		return errors.ErrUserNotLogin
+		Response(seq, errors.ErrUserNotLogin, c)
+		return
 	}
 	switch msg.GmCmd {
 	case protoc.GmCreateUser:
-		rsp, err = ctrlUser.CreateUser(msg.Arg, c)
+		info, err := ctrlUser.CreateUser(msg.Arg, c)
+		if err != nil {
+			Response(seq, err, c)
+			return
+		}
+		Response(seq, info, c)
+		return
 	case protoc.GmLogin:
-		rsp, err = ctrlUser.UserLogin(msg.Arg, c)
+		u, err := ctrlUser.UserLogin(msg.Arg, c)
+		if err != nil {
+			Response(seq, err, c)
+			return
+		}
+		Response(seq, u, c)
+		return
 	case protoc.GmRoomList:
-		rsp = ctrlRoom.RoomList()
+		Response(seq, ctrlRoom.RoomList(), c)
+		return
 	case protoc.GmEnterRoom:
-		var roomID int
-		roomID, err = strconv.Atoi(msg.Arg)
+		roomID, err := strconv.Atoi(msg.Arg)
 		if err != nil {
-			err = errors.ErrInvalidRoomID
-		} else {
-			room := ctrlRoom.GetByID(roomID)
-			if room == nil {
-				ctrlRoom.CreateRoom()
-			}
-			user.EntryRoom(room)
-			rsp = room
+			Response(seq, errors.ErrInvalidRoomID, c)
+			return
 		}
+		room := ctrlRoom.GetByID(roomID)
+		if room == nil {
+			if room, err = ctrlRoom.CreateRoom(roomID); err != nil {
+				Response(seq, errors.ErrInvalidRoomID, c)
+				return
+			}
+		}
+		user.EntryRoom(room)
+		Response(seq, room, c)
+		return
 	case protoc.GmStats:
-		rsp = user
-	case protoc.GmPopular:
-		var roomID int
-		roomID, err = strconv.Atoi(msg.Arg)
-		if err != nil {
-			err = errors.ErrInvalidRoomID
-		} else {
-			room := ctrlRoom.GetByID(roomID)
-			if room == nil {
-				return errors.ErrRoomIDNotExists
-			}
-			rsp = room.PopularWords()
+		u := ctrlUser.GetByName(msg.Arg)
+		if u == nil {
+			Response(seq, errors.ErrUserNotExisted, c)
+			return
 		}
+		i := ctrlUser.GetUserInfoByName(msg.Arg)
+		if i == nil {
+			i = &models.UserInfo{User: u}
+			return
+		}
+		Response(seq, i, c)
+		return
+	case protoc.GmPopular:
+		roomID, err := strconv.Atoi(msg.Arg)
+		if err != nil {
+			Response(seq, errors.ErrInvalidRoomID, c)
+			return
+		}
+		room := ctrlRoom.GetByID(roomID)
+		if room == nil {
+			Response(seq, errors.ErrRoomIDNotExists, c)
+			return
+		}
+		Response(seq, room.PopularWords(), c)
+		return
 	default:
-		err = errors.ErrUnknownGmCmd
+		Response(seq, errors.ErrUnknownGmCmd, c)
+		return
 	}
+}
 
-	if err != nil {
-		return err
-	}
+func Response(seq protoc.Seq, msg interface{}, c *qsock.Node) {
 	body := ""
-	if s, ok := rsp.(interface{ String() string }); ok {
+	if err, ok := msg.(error); ok {
+		body = "[SERVER] " + err.Error()
+	} else if s, ok := msg.(interface{ String() string }); ok {
 		body = s.String()
 	} else {
-		body = qjson.UnsafeMarshalString(rsp)
+		body = qjson.UnsafeMarshalString(msg)
 	}
-	return c.SendMessage(protoc.NewEcho(msg.Seq, body))
+	if err := c.SendMessage(protoc.NewEcho(seq, "SYSTEM", body)); err != nil {
+		fmt.Println(err)
+	}
 }

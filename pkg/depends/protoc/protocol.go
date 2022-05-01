@@ -3,9 +3,10 @@ package protoc
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
-	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/saitofun/qlib/net/qbuf"
 	"github.com/saitofun/qlib/net/qmsg"
@@ -31,35 +32,29 @@ func (t Type) String() string {
 	}
 }
 
-func (t Type) Uint32() uint32 {
-	return uint32(t)
-}
+func (t Type) Uint32() uint32 { return uint32(t) }
 
 // Seq 消息序列号, 一个TCP连接内唯一
 type Seq uint32
 
-func (s Seq) String() string {
-	return strconv.FormatUint(uint64(s), 10)
-}
+func (s Seq) String() string { return strconv.FormatUint(uint64(s), 10) }
 
-func (s Seq) Uint32() uint32 {
-	return uint32(s)
-}
+func (s Seq) Uint32() uint32 { return uint32(s) }
 
 // Header 消息头
 type Header struct {
 	Seq
-	Type        // Cmd 消息类型
-	Len  uint32 // Len 消息长度
+	Type
+	Len uint32 // Len 消息长度
 }
 
 func (h *Header) ID() qmsg.ID { return h.Seq }
 
 func (h *Header) Bytes() []byte {
-	ret := make([]byte, 0, 12)
-	binary.BigEndian.PutUint32(ret[0:4], h.Seq.Uint32())
-	binary.BigEndian.PutUint32(ret[8:12], h.Type.Uint32())
-	binary.BigEndian.PutUint32(ret[4:8], h.Len)
+	ret := make([]byte, 12)
+	order.PutUint32(ret[0:4], h.Seq.Uint32())
+	order.PutUint32(ret[4:8], h.Type.Uint32())
+	order.PutUint32(ret[8:12], h.Len)
 	return ret
 }
 
@@ -69,16 +64,17 @@ func (h *Header) Unmarshal(d []byte) error {
 	if len(d) < 12 {
 		return fmt.Errorf("data lack")
 	}
-	h.Seq = Seq(binary.BigEndian.Uint32(d[0:4]))
-	h.Type = Type(binary.BigEndian.Uint32(d[4:8]))
-	h.Len = binary.BigEndian.Uint32(d[8:12])
+	h.Seq = Seq(order.Uint32(d[0:4]))
+	h.Type = Type(order.Uint32(d[4:8]))
+	h.Len = order.Uint32(d[8:12])
 	return nil
 }
 
 // Echo srv <-> cli
 type Echo struct {
 	Header
-	Bodies []EchoMessage
+	From string
+	Body string
 }
 
 var _ qmsg.Message = (*Echo)(nil)
@@ -89,9 +85,8 @@ func (m *Echo) Bytes() []byte {
 	buf := bytes.NewBuffer(nil)
 
 	buf.Write(m.Header.Bytes())
-	for i := range m.Bodies {
-		buf.Write(m.Bodies[i].Bytes())
-	}
+	buf.Write(BinaryText(m.From))
+	buf.Write(BinaryText(m.Body))
 
 	return buf.Bytes()
 }
@@ -99,69 +94,58 @@ func (m *Echo) Bytes() []byte {
 func (m Echo) Marshal() ([]byte, error) { return m.Bytes(), nil }
 
 func (m *Echo) Unmarshal(dat []byte) error {
-	offset := 0
+	offset := uint32(0)
 	if err := m.Header.Unmarshal(dat); err != nil {
 		return err
 	}
 	offset += 12
 
-	for cur := dat[offset:]; len(cur) > 0; {
-		if len(cur) < 4 {
-			return fmt.Errorf("data lack")
-		}
-		body := EchoMessage{
-			Len: binary.BigEndian.Uint32(cur[0:4]),
-		}
-		offset += 4
-		cur = cur[offset:]
-		if uint32(len(cur)) < body.Len {
-			return fmt.Errorf("data lack")
-		}
-		offset += int(body.Len)
-		body.Body = string(cur[0:offset])
-		m.Bodies = append(m.Bodies, body)
+	str, delta, err := ParseString(dat[offset:])
+	if err != nil {
+		return err
 	}
+	offset += delta
+	m.From = str
+
+	str, delta, err = ParseString(dat[offset:])
+	if err != nil {
+		return err
+	}
+	offset += delta
+	m.Body = str
+
 	return nil
 }
 
-func NewEcho(seq Seq, bodies ...string) *Echo {
-	ret := &Echo{
-		Header: Header{Seq: seq, Type: CmdEcho},
-		Bodies: make([]EchoMessage, len(bodies)),
-	}
-	for i := range bodies {
-		if len(bodies[i]) == 0 {
-			continue
-		}
-		ret.Bodies = append(ret.Bodies, EchoMessage{
-			Len:  uint32(len(bodies[i])),
-			Body: bodies[i],
-		})
-		ret.Header.Len += uint32(4 + len(bodies[i]))
-	}
-	return ret
+func (m *Echo) SetFrom(from string) {
+	m.From = from
+	m.Len = uint32(len(m.From) + len(m.Body) + 8)
 }
 
-type EchoMessage struct {
-	Len  uint32
-	Body string
+func (m *Echo) SetBody(body string) {
+	m.From = body
+	m.Len = uint32(len(m.From) + len(m.Body) + 8)
 }
 
-func (m *EchoMessage) Bytes() []byte {
-	buf := bytes.NewBuffer(nil)
+func (m *Echo) String() string { return fmt.Sprintf("[%s]: %s", m.From, m.Body) }
 
-	binary.Write(buf, binary.BigEndian, m.Len)
-	buf.WriteString(m.Body)
-
-	return buf.Bytes()
+func NewEcho(seq Seq, from, body string) *Echo {
+	return &Echo{
+		Header: Header{
+			Seq:  seq,
+			Type: CmdEcho,
+			Len:  uint32(8 + len(from) + len(body)),
+		},
+		From: from,
+		Body: body,
+	}
 }
 
 // Instruct cli -> srv
 type Instruct struct {
 	Header
 	GmCmd
-	ArgLen uint32 // ArgLen 参数长度
-	Arg    string // Arg 参数内容
+	Arg string // Arg 参数内容
 }
 
 var _ qmsg.Message = (*Instruct)(nil)
@@ -173,8 +157,7 @@ func (m *Instruct) Bytes() []byte {
 
 	buf.Write(m.Header.Bytes())
 	binary.Write(buf, binary.BigEndian, m.GmCmd)
-	binary.Write(buf, binary.BigEndian, m.ArgLen)
-	buf.WriteString(m.Arg)
+	buf.Write(BinaryText(m.Arg))
 
 	return buf.Bytes()
 }
@@ -182,34 +165,34 @@ func (m *Instruct) Bytes() []byte {
 func (m Instruct) Marshal() ([]byte, error) { return m.Bytes(), nil }
 
 func (m *Instruct) Unmarshal(dat []byte) error {
-	offset := 0
+	offset := uint32(0)
 	if err := m.Header.Unmarshal(dat); err != nil {
 		return err
 	}
 	offset += 12
+	if uint32(len(dat[offset:])) != m.Len {
+		return errUnexpectedPayloadLength
+	}
+
 	if len(dat[offset:]) < 4 {
-		return fmt.Errorf("data lack")
+		return errDataLack
 	}
 	m.GmCmd = GmCmd(binary.BigEndian.Uint32(dat[offset : offset+4]))
 	offset += 4
-	if len(dat[offset:]) < 4 {
-		return fmt.Errorf("data lack")
+	str, delta, err := ParseString(dat[offset:])
+	if err != nil {
+		return err
 	}
-	m.ArgLen = binary.BigEndian.Uint32(dat[offset : offset+4])
-	offset += 4
-	if uint32(len(dat[offset:])) < m.ArgLen {
-		return fmt.Errorf("data lack")
-	}
-	if len(dat[offset:]) > 0 {
-		m.Arg = string(dat[offset : offset+int(m.ArgLen)])
-	}
+	offset += delta
+	m.Arg = str
 	return nil
 }
 
+func (m *Instruct) String() string { return strings.TrimSpace(m.GmCmd.String() + " " + m.Arg) }
+
 func NewInstruct(seq Seq, cmd GmCmd, args ...string) *Instruct {
-	arglen, arg := uint32(0), ""
+	arg := ""
 	if len(args) > 0 && args[0] != "" {
-		arglen = uint32(len(args))
 		arg = args[0]
 	}
 	return &Instruct{
@@ -218,9 +201,8 @@ func NewInstruct(seq Seq, cmd GmCmd, args ...string) *Instruct {
 			Type: CmdInstruct,
 			Len:  uint32(8 + len(arg)),
 		},
-		GmCmd:  cmd,
-		ArgLen: arglen,
-		Arg:    arg,
+		GmCmd: cmd,
+		Arg:   arg,
 	}
 }
 
@@ -236,6 +218,25 @@ const (
 	GmPopular
 )
 
+func (gm GmCmd) String() string {
+	switch gm {
+	case GmCreateUser:
+		return "/reg"
+	case GmLogin:
+		return "/login"
+	case GmRoomList:
+		return "/rooms"
+	case GmEnterRoom:
+		return "/room"
+	case GmStats:
+		return "/stats"
+	case GmPopular:
+		return "/popular"
+	default:
+		return ""
+	}
+}
+
 type parser struct{}
 
 var Parser qmsg.Parser = &parser{}
@@ -245,13 +246,13 @@ func (p parser) Marshal(buf qbuf.Buffer, msg qmsg.Message) error {
 
 	buf.Reset()
 
-	switch msg.(type) {
+	switch _msg := msg.(type) {
 	case *Echo:
-		_, err = buf.Write(buf.Bytes())
+		_, err = buf.Write(_msg.Bytes())
 	case *Instruct:
-		_, err = buf.Write(buf.Bytes())
+		_, err = buf.Write(_msg.Bytes())
 	default:
-		err = fmt.Errorf("unknown message: %s", reflect.TypeOf(msg))
+		err = errUnknownMessage
 	}
 	return err
 }
@@ -280,18 +281,45 @@ func (p parser) Unmarshal(buf qbuf.Buffer) (qmsg.Message, error) {
 	case CmdEcho:
 		echo := &Echo{}
 		if err = echo.Unmarshal(dat); err != nil {
-			msg = echo
+			return nil, err
 		}
+		msg = echo
 	case CmdInstruct:
 		instruct := &Instruct{}
 		if err = instruct.Unmarshal(dat); err != nil {
-			msg = instruct
+			return nil, err
 		}
+		msg = instruct
 	default:
-		err = fmt.Errorf("unknown message: %d", header.Type)
-	}
-	if err != nil {
-		return nil, err
+		return nil, errUnknownMessage
 	}
 	return msg, nil
 }
+
+func BinaryText(v string) []byte {
+	buf := bytes.NewBuffer(make([]byte, 0, len(v)+4))
+
+	binary.Write(buf, order, uint32(len(v)))
+	buf.WriteString(v)
+	return buf.Bytes()
+}
+
+func ParseString(v []byte) (string, uint32, error) {
+	if len(v) < 4 {
+		return "", 0, errDataLack
+	}
+	length := order.Uint32(v[0:4])
+	if uint32(len(v[4:])) < length {
+		return "", 0, errDataLack
+	}
+	str := string(v[4 : length+4])
+	return str, length + 4, nil
+}
+
+var (
+	order = binary.BigEndian
+
+	errDataLack                = errors.New("CHAT:data lack")
+	errUnexpectedPayloadLength = errors.New("CHAT:unexpected payload length")
+	errUnknownMessage          = errors.New("CHAT:unknown message")
+)

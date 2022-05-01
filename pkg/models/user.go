@@ -2,20 +2,17 @@ package models
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/saitofun/chat/cmd/config"
 	"github.com/saitofun/chat/pkg/depends/protoc"
 	"github.com/saitofun/chat/pkg/errors"
-	"github.com/saitofun/qlib/container/qtype"
-	"github.com/saitofun/qlib/net/qmsg"
+	"github.com/saitofun/chat/pkg/modules/profanity_words"
 	"github.com/saitofun/qlib/net/qsock"
 )
-
-type UserMessage struct {
-	User string       // User whom send this
-	Body qmsg.Message // Body message body
-}
 
 type User struct {
 	Name      string    `json:"name"`      // Name username global unique
@@ -35,7 +32,6 @@ func (u User) OnlineDuration() time.Duration {
 type UserInfo struct {
 	*User
 	room   *Room
-	sub    *qtype.Int
 	node   *qsock.Node
 	mtx    *sync.Mutex
 	ctx    context.Context
@@ -45,12 +41,10 @@ type UserInfo struct {
 func NewUserInfo(user *User, node *qsock.Node) *UserInfo {
 	user.LastLogin = time.Now()
 	return &UserInfo{
-		User:   user,
-		room:   nil,
-		sub:    qtype.NewInt(),
-		node:   node,
-		mtx:    &sync.Mutex{},
-		cancel: nil,
+		User: user,
+		room: nil,
+		node: node,
+		mtx:  &sync.Mutex{},
 	}
 }
 
@@ -60,11 +54,8 @@ func (u *UserInfo) Pub(msg *protoc.Echo) error {
 	if u.room == nil {
 		return errors.ErrNotEnterRoom
 	}
-	// @todo filter dirty word
-	u.room.Pub(&UserMessage{
-		User: u.Name,
-		Body: msg,
-	})
+	msg.SetBody(profanity_words.MaskWordsBy(msg.Body, config.ProfanityWordsMask))
+	u.room.Pub(msg)
 	return nil
 }
 
@@ -72,14 +63,23 @@ func (u *UserInfo) EntryRoom(room *Room) {
 	u.mtx.Lock()
 	defer u.mtx.Unlock()
 
-	if u.sub.Val() != 0 {
+	if u.cancel != nil {
 		u.cancel()
-		u.sub.Set(0)
+	}
+	if u.room != nil {
+		u.room.Leave(u.Name)
 	}
 	u.room = room
 	u.ctx, u.cancel = context.WithCancel(context.Background())
-	u.room.Entry()
 	go u.consuming()
+}
+
+func (u *UserInfo) Leave() {
+	u.mtx.Lock()
+	defer u.mtx.Unlock()
+	if u.room != nil {
+		u.room.Leave(u.Name)
+	}
 }
 
 func (u *UserInfo) Logoff() {
@@ -88,25 +88,54 @@ func (u *UserInfo) Logoff() {
 
 	u.node.Stop()
 	u.LogoffAt = time.Now()
+	if u.cancel != nil {
+		u.cancel()
+	}
 	if u.room != nil {
-		u.room.Leave()
+		u.room.Leave(u.Name)
 	}
 }
 
 func (u *UserInfo) consuming() {
-	defer u.Logoff()
-	ch := u.room.Entry()
+	cache, ch := u.room.Entry(u.Name)
+	for _, msg := range cache {
+		if msg.From == u.Name {
+			continue
+		}
+		if err := u.node.WriteMessage(msg); err != nil {
+			u.Logoff()
+			return
+		}
+	}
 	for {
 		select {
 		case <-u.ctx.Done():
 			return
 		case msg := <-ch:
-			if msg.User == u.Name {
+			if msg.From == u.Name {
 				continue
 			}
-			if err := u.node.WriteMessage(msg.Body); err != nil {
+			if err := u.node.WriteMessage(msg); err != nil {
+				u.Logoff()
 				return
 			}
 		}
 	}
+}
+
+func (u *UserInfo) String() string {
+	u.mtx.Lock()
+	room := "未进入房间"
+	if u.room != nil {
+		room = strconv.Itoa(u.room.Id)
+	}
+	u.mtx.Unlock()
+
+	du := u.OnlineDuration()
+
+	return fmt.Sprintf("\n用户名: %s\n"+
+		"登陆时间: %s\n"+
+		"所在房间: %s\n"+
+		"在线时长: %s\n", u.Name, u.LastLogin.Format("2006-01-02 15:04:05"),
+		room, du.String())
 }

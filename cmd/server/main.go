@@ -16,4 +16,5 @@ func wait() {
 }
 
 func main() {
+	wait()
 }

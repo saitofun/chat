@@ -12,6 +12,10 @@ var (
 	Addr                     = "localhost"
 	Port                     = 10086
 
-	ServerAddr = fmt.Sprintf("0.0.0.0:%d", Port)
+	ServerAddr = fmt.Sprintf(":%d", Port)
 	ClientAddr = fmt.Sprintf("localhost:%d", Port)
+
+	RemoteProfanityWordsURL = "https://raw.githubusercontent.com/CloudcadeSF/google-profanity-words/main/data/list.txt"
+	LocalProfanityWordsPath = "config/profanity_words.txt"
+	ProfanityWordsMask      = rune('*')
 )
