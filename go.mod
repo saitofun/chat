@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/google/uuid v1.3.0
-	github.com/saitofun/qlib v0.0.0-20220430232534-c7e98b73dd55
+	github.com/saitofun/qlib v0.0.0-20220501130155-6fade57104e7
 	github.com/stretchr/testify v1.3.0
 )
 
