@@ -18,4 +18,5 @@ clean:
 
 download:
 	cd $(root)
+	go mod tidy
 	go mod download
