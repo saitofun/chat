@@ -123,11 +123,13 @@ func (m *Echo) SetFrom(from string) {
 }
 
 func (m *Echo) SetBody(body string) {
-	m.From = body
+	m.Body = body
 	m.Len = uint32(len(m.From) + len(m.Body) + 8)
 }
 
-func (m *Echo) String() string { return fmt.Sprintf("[%s]: %s", m.From, m.Body) }
+func (m *Echo) String() string {
+	return fmt.Sprintf("[%s]: %s", m.From, m.Body)
+}
 
 func NewEcho(seq Seq, from, body string) *Echo {
 	return &Echo{
