@@ -18,4 +18,9 @@ func TestMaskBy(t *testing.T) {
 
 	tt := require.New(t)
 	tt.Equal(expect, MaskWordsBy(input, ' '))
+
+	AddWords("fuck")
+	input = "/fuckyou/"
+	expect = "/****you/"
+	tt.Equal(expect, MaskWordsBy(input, '*'))
 }

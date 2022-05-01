@@ -57,7 +57,7 @@ func MaskWordsBy(src string, replacer rune) string {
 	matched := root.ScanSentence(src)
 	sentence := []rune(src)
 	for _, pair := range matched {
-		for idx := pair[0]; idx <= pair[1]; idx++ {
+		for idx := pair[0]; idx < pair[1]; idx++ {
 			sentence[idx] = replacer
 		}
 	}
