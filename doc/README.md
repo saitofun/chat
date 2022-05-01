@@ -97,4 +97,13 @@ func (OrderedSet)AddWords(words... string)
 func (OrderedSet)TopN(n int) []KeyCountElement
 ```
 
+## 部署运行
+
+```shell
+$ cd build
+$ make # 构建
+$ ./server # 运行服务
+$ ./client # 运行客户端
+```
+
 > Author: birdyfj@gmail.com
