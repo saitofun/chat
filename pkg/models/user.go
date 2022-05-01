@@ -7,10 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/saitofun/chat/cmd/config"
 	"github.com/saitofun/chat/pkg/depends/protoc"
 	"github.com/saitofun/chat/pkg/errors"
-	"github.com/saitofun/chat/pkg/modules/profanity_words"
 	"github.com/saitofun/qlib/net/qsock"
 )
 
@@ -54,7 +52,6 @@ func (u *UserInfo) Pub(msg *protoc.Echo) error {
 	if u.room == nil {
 		return errors.ErrNotEnterRoom
 	}
-	msg.SetBody(profanity_words.MaskWordsBy(msg.Body, config.ProfanityWordsMask))
 	u.room.Pub(msg)
 	return nil
 }

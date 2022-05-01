@@ -30,7 +30,7 @@ func (e *KeyCountElement) Count() int { return e.count.Val() }
 
 func (e *KeyCountElement) Add(delta int) { e.count.Add(delta) }
 
-type zset struct {
+type OrderedSet struct {
 	set      map[string]*qlist.Element
 	sequence *qlist.List   // sequence 发布按序
 	ordered  *qlist.List   // ordered 频次按序
@@ -38,8 +38,8 @@ type zset struct {
 	mtx      *sync.Mutex
 }
 
-func NewSet(keep time.Duration) *zset {
-	return &zset{
+func NewSet(keep time.Duration) *OrderedSet {
+	return &OrderedSet{
 		set:      make(map[string]*qlist.Element),
 		sequence: qlist.New(),
 		ordered:  qlist.New(),
@@ -49,7 +49,7 @@ func NewSet(keep time.Duration) *zset {
 }
 
 // AddWords 向集合中添加单词
-func (z *zset) AddWords(words ...string) {
+func (z *OrderedSet) AddWords(words ...string) {
 	z.mtx.Lock()
 	defer z.mtx.Unlock()
 
@@ -66,7 +66,7 @@ func (z *zset) AddWords(words ...string) {
 }
 
 // check 检查过期单词
-func (z *zset) check() {
+func (z *OrderedSet) check() {
 	z.sequence.ReverseRange(func(elem *qlist.Element) bool {
 		if elem == nil {
 			return false
@@ -87,7 +87,7 @@ func (z *zset) check() {
 }
 
 // ReorderAfterCountIncr 数量降低 重新调整排序
-func (z *zset) reorderAfterCountIncr(elem *qlist.Element) {
+func (z *OrderedSet) reorderAfterCountIncr(elem *qlist.Element) {
 	prev, count := elem.Prev(), elem.Value.(*KeyCountElement).Count()
 	for ; prev != nil; prev = prev.Prev() {
 		if count < prev.Value.(*KeyCountElement).Count() {
@@ -102,7 +102,7 @@ func (z *zset) reorderAfterCountIncr(elem *qlist.Element) {
 }
 
 // ReorderAfterCountDecr 数量增加 重新调整排序
-func (z *zset) reorderAfterCountDecr(elem *qlist.Element) {
+func (z *OrderedSet) reorderAfterCountDecr(elem *qlist.Element) {
 	next, count := elem.Next(), elem.Value.(*KeyCountElement).Count()
 	for ; next != nil; next = next.Next() {
 		if count > next.Value.(*KeyCountElement).Count() {
@@ -117,7 +117,7 @@ func (z *zset) reorderAfterCountDecr(elem *qlist.Element) {
 }
 
 // TopN 出现频次最多的N个单词
-func (z *zset) TopN(n int) (ret []KeyCountElement) {
+func (z *OrderedSet) TopN(n int) (ret []KeyCountElement) {
 	z.mtx.Lock()
 	defer z.mtx.Unlock()
 
@@ -139,4 +139,4 @@ func (z *zset) TopN(n int) (ret []KeyCountElement) {
 	return
 }
 
-func (z *zset) Top1() KeyCountElement { return z.TopN(1)[0] }
+func (z *OrderedSet) Top1() KeyCountElement { return z.TopN(1)[0] }
